@@ -1,0 +1,49 @@
+name: Cookie Fabrikası
+
+# Her 2 saatte bir çalış
+on:
+  schedule:
+    # Her 2 saatte bir (UTC saati)
+    - cron: '0 */2 * * *'
+  
+  # Manuel çalıştırma butonu (test için)
+  workflow_dispatch:
+
+jobs:
+  cookie-al:
+    runs-on: ubuntu-latest
+    
+    steps:
+      # 1. Kodu indir
+      - name: Kodu indir
+        uses: actions/checkout@v4
+      
+      # 2. Python kur
+      - name: Python kur
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      
+      # 3. Playwright cache (hızlandırma)
+      - name: Playwright cache
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/ms-playwright
+          key: playwright-${{ runner.os }}-v1
+      
+      # 4. Gereksinimleri kur
+      - name: Gereksinimleri kur
+        run: |
+          pip install -r requirements-actions.txt
+          playwright install chromium
+          playwright install-deps chromium
+      
+      # 5. Cookie al ve Oracle'a gönder
+      - name: Cookie al ve gönder
+        env:
+          ORACLE_IP: ${{ secrets.ORACLE_IP }}
+          ORACLE_PORT: ${{ secrets.ORACLE_PORT }}
+          ORACLE_API_KEY: ${{ secrets.ORACLE_API_KEY }}
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+        run: python cookie_fabrikasi.py
