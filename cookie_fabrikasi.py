@@ -1,147 +1,173 @@
 #!/usr/bin/env python3
 """
-Sahibinden.com Cookie ve İlan Çekici
-curl_cffi ile Chrome TLS parmak izi taklidi
+Sahibinden.com Cookie Fabrikasi
+undetected-chromedriver + Versiyon Sabitleme
 """
 
-from curl_cffi import requests
-from bs4 import BeautifulSoup
+import undetected_chromedriver as uc
 import json
+import time
+import random
 import sys
+import os
 from datetime import datetime, timezone
+from bs4 import BeautifulSoup
 
 ANA_URL = "https://www.sahibinden.com"
 HEDEF_URL = "https://www.sahibinden.com/ekran-karti-masaustu"
+KRITIKLER = ["st", "vid", "_px3", "_pxvid", "_pxhd"]
 
 
 def log(mesaj):
-    """Zaman damgalı log"""
     ts = datetime.now().strftime("%H:%M:%S")
     print(f"[{ts}] {mesaj}", flush=True)
 
 
 def main():
-    log("🚀 Script başladı")
-
-    tum_cookieler = {}
+    log("🚀 Basladi")
 
     # ═══════════════════════════════════════════════════════
-    # 1️⃣ ANA SAYFA
+    # TARAYICI AYARLARI
     # ═══════════════════════════════════════════════════════
-    log("① Ana sayfa isteği atılıyor...")
+    opts = uc.ChromeOptions()
+    opts.add_argument("--no-sandbox")
+    opts.add_argument("--disable-dev-shm-usage")
+    opts.add_argument("--disable-gpu")
+    opts.add_argument("--window-size=1920,1080")
+    opts.add_argument("--lang=tr-TR")
+    opts.add_argument("--disable-extensions")
+    opts.add_argument("--disable-infobars")
 
-    try:
-        r1 = requests.get(
-            ANA_URL,
-            impersonate="chrome",  # Otomatik en güncel Chrome taklidi
-            timeout=30
-        )
-        log(f"   ✓ Status: {r1.status_code}")
-        log(f"   ✓ HTML Boyutu: {len(r1.text):,} karakter")
-
-        # Cookie'leri topluyoruz
-        tum_cookieler.update(dict(r1.cookies))
-        log(f"   ✓ Cookie: {len(tum_cookieler)} adet")
-
-    except Exception as e:
-        log(f"   ❌ Ana sayfa hatası: {e}")
-        sys.exit(1)
-
-    # ═══════════════════════════════════════════════════════
-    # 2️⃣ HEDEF SAYFA (Ekran Kartları)
-    # ═══════════════════════════════════════════════════════
-    log("② Hedef sayfa isteği atılıyor...")
-
-    try:
-        r2 = requests.get(
-            HEDEF_URL,
-            impersonate="chrome",
-            cookies=tum_cookieler,
-            headers={"Referer": ANA_URL},
-            timeout=30
-        )
-        log(f"   ✓ Status: {r2.status_code}")
-        log(f"   ✓ HTML Boyutu: {len(r2.text):,} karakter")
-
-        # Cookie'leri güncelle
-        tum_cookieler.update(dict(r2.cookies))
-
-    except Exception as e:
-        log(f"   ❌ Hedef sayfa hatası: {e}")
-        sys.exit(1)
-
-    # ═══════════════════════════════════════════════════════
-    # 3️⃣ DOSYALARI KAYDET
-    # ═══════════════════════════════════════════════════════
+    driver = None
     
-    # HTML kaydet
-    with open("sayfa.html", "w", encoding="utf-8") as f:
-        f.write(r2.text)
-    log("   ✓ sayfa.html kaydedildi")
-
-    # Cookie kaydet
-    with open("cookies.json", "w", encoding="utf-8") as f:
-        json.dump({
-            "cookies": tum_cookieler,
-            "toplam": len(tum_cookieler),
-            "isimler": sorted(tum_cookieler.keys()),
-            "tarih": datetime.now(timezone.utc).isoformat()
-        }, f, indent=2, ensure_ascii=False)
-    log("   ✓ cookies.json kaydedildi")
-
-    # ═══════════════════════════════════════════════════════
-    # 4️⃣ İLANLARI PARSE ET
-    # ═══════════════════════════════════════════════════════
-    log("③ İlanlar parse ediliyor...")
-
-    soup = BeautifulSoup(r2.text, "html.parser")
-    ilanlar = []
-
-    for item in soup.select("tr.searchResultsItem"):
-        baslik_el = item.select_one("a.classifiedTitle")
-        fiyat_el = item.select_one("td.searchResultsPriceValue span")
-        konum_el = item.select_one("td.searchResultsLocationValue")
+    try:
+        log("Tarayici baslatiliyor...")
         
-        if baslik_el:
-            ilanlar.append({
-                "baslik": baslik_el.get_text(strip=True),
-                "url": "https://www.sahibinden.com" + baslik_el.get("href", ""),
-                "fiyat": fiyat_el.get_text(strip=True) if fiyat_el else "",
-                "konum": konum_el.get_text(" ", strip=True) if konum_el else ""
-            })
+        # ═══════════════════════════════════════════════════
+        # ÖNEMLI: version_main=145
+        # Kurulu Chrome 145 oldugu icin driver da 145 olmali
+        # ═══════════════════════════════════════════════════
+        driver = uc.Chrome(
+            options=opts,
+            headless=False,
+            use_subprocess=True,
+            version_main=145,  # <-- KRITIK DÜZELTME
+        )
+        
+        log("Tarayici acildi")
 
-    # İlanları kaydet
-    with open("ilanlar.json", "w", encoding="utf-8") as f:
-        json.dump({
-            "toplam": len(ilanlar),
-            "tarih": datetime.now(timezone.utc).isoformat(),
-            "ilanlar": ilanlar[:50]  # İlk 50 ilan
-        }, f, indent=2, ensure_ascii=False)
+        # ═══════════════════════════════════════════════════════
+        # 1️⃣ ANA SAYFA
+        # ═══════════════════════════════════════════════════════
+        log("① Ana sayfa...")
+        driver.get(ANA_URL)
+        time.sleep(random.uniform(6, 9))
 
-    log(f"   ✓ {len(ilanlar)} ilan bulundu")
+        html1 = driver.page_source
+        log(f"   HTML: {len(html1):,}")
 
-    # ═══════════════════════════════════════════════════════
-    # 5️⃣ ÖZET
-    # ═══════════════════════════════════════════════════════
-    log("\n" + "═" * 50)
-    log("  ÖZET")
-    log("═" * 50)
-    log(f"  HTML Boyutu : {len(r2.text):,} karakter")
-    log(f"  Cookie      : {len(tum_cookieler)} adet")
-    log(f"  İlan        : {len(ilanlar)} adet")
-    log(f"═" * 50)
+        # Challenge bekle
+        if len(html1) < 15000:
+            log("   Challenge bekleniyor (25s)...")
+            time.sleep(25)
+            html1 = driver.page_source
+            log(f"   Yeni HTML: {len(html1):,}")
 
-    # Başarı kontrolü
-    if len(r2.text) < 50000:
-        log("\n⚠️  UYARI: HTML boyutu küçük, muhtemelen engellendin")
-        log("   sayfa.html dosyasını kontrol et")
+        # Scroll
+        driver.execute_script("window.scrollTo({top: 400, behavior: 'smooth'})")
+        time.sleep(2)
+
+        # ═══════════════════════════════════════════════════════
+        # 2️⃣ HEDEF SAYFA
+        # ═══════════════════════════════════════════════════════
+        log("② Hedef sayfa...")
+        driver.get(HEDEF_URL)
+        time.sleep(random.uniform(8, 12))
+
+        # Insan gibi scroll
+        for y in [350, 750, 1200]:
+            driver.execute_script(f"window.scrollTo({{top: {y}, behavior: 'smooth'}})")
+            time.sleep(random.uniform(1.5, 3))
+
+        html2 = driver.page_source
+        baslik = driver.title
+        log(f"   Baslik: {baslik}")
+        log(f"   HTML: {len(html2):,}")
+
+        # ═══════════════════════════════════════════════════════
+        # 3️⃣ COOKIE TOPLA
+        # ═══════════════════════════════════════════════════════
+        cookieler = driver.get_cookies()
+        cookie_dict = {c["name"]: c["value"] for c in cookieler}
+
+        log(f"   Cookie: {len(cookieler)} adet")
+
+        # Kritikleri kontrol et
+        bulunan = [k for k in KRITIKLER if k in cookie_dict]
+        log(f"   Kritik: {len(bulunan)}/{len(KRITIKLER)} → {bulunan}")
+
+        # ═══════════════════════════════════════════════════════
+        # 4️⃣ DOSYALARI KAYDET
+        # ═══════════════════════════════════════════════════════
+        
+        # HTML
+        with open("sayfa.html", "w", encoding="utf-8") as f:
+            f.write(html2)
+
+        # Cookies
+        with open("cookies.json", "w", encoding="utf-8") as f:
+            json.dump({
+                "cookies": cookie_dict,
+                "toplam": len(cookie_dict),
+                "kritik_bulunan": bulunan,
+                "tarih": datetime.now(timezone.utc).isoformat()
+            }, f, indent=2, ensure_ascii=False)
+
+        # Ilanlar
+        soup = BeautifulSoup(html2, "html.parser")
+        ilanlar = []
+        for item in soup.select("tr.searchResultsItem"):
+            b = item.select_one("a.classifiedTitle")
+            f = item.select_one("td.searchResultsPriceValue span")
+            if b:
+                ilanlar.append({
+                    "baslik": b.get_text(strip=True),
+                    "url": "https://www.sahibinden.com" + b.get("href", ""),
+                    "fiyat": f.get_text(strip=True) if f else ""
+                })
+
+        with open("ilanlar.json", "w", encoding="utf-8") as f:
+            json.dump({"toplam": len(ilanlar), "ilanlar": ilanlar[:30]}, 
+                      f, indent=2, ensure_ascii=False)
+
+        # ═══════════════════════════════════════════════════════
+        # ÖZET
+        # ═══════════════════════════════════════════════════════
+        log("\n" + "═" * 50)
+        log("  ÖZET")
+        log("═" * 50)
+        log(f"  HTML   : {len(html2):,}")
+        log(f"  Cookie : {len(cookie_dict)}")
+        log(f"  Kritik : {bulunan}")
+        log(f"  Ilan   : {len(ilanlar)}")
+        log("═" * 50)
+
+        if len(html2) < 50000:
+            log("\n⚠️  ENGELLENDI")
+            sys.exit(1)
+
+        log("\n✅ BASARILI")
+
+    except Exception as e:
+        log(f"❌ Hata: {e}")
+        import traceback
+        traceback.print_exc()
         sys.exit(1)
 
-    if len(ilanlar) == 0:
-        log("\n⚠️  UYARI: İlan bulunamadı")
-        log("   HTML yapısı değişmiş olabilir")
-
-    log("\n✅ TAMAMLANDI")
+    finally:
+        if driver:
+            driver.quit()
+            log("Tarayici kapandi")
 
 
 if __name__ == "__main__":
