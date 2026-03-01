@@ -8,7 +8,7 @@ on:
 jobs:
   cookie-topla:
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    timeout-minutes: 15
 
     steps:
       - name: Repo indir
@@ -19,25 +19,37 @@ jobs:
         with:
           python-version: "3.11"
 
-      - name: Paketleri kur
+      - name: Chrome ve Xvfb kur
         run: |
-          pip install -r requirements-actions.txt
-          echo "--- Kurulu paketler ---"
-          pip list | grep -iE "curl|beautiful|requests"
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq xvfb
 
-      - name: Scripti çalıştır
+          wget -qO /tmp/chrome.deb \
+            "https://dl.google.com/linux/direct/google-chrome-stable_current_amd64.deb"
+          sudo dpkg -i /tmp/chrome.deb || sudo apt-get -f install -y -qq
+
+          echo "Chrome versiyonu:"
+          google-chrome --version
+
+      - name: Python paketleri kur
+        run: pip install -q -r requirements-actions.txt
+
+      - name: Scripti calistir
         run: |
-          python cookie_fabrikasi.py || true
+          xvfb-run \
+            --auto-servernum \
+            --server-args="-screen 0 1920x1080x24 -ac" \
+            python cookie_fabrikasi.py || true
+
           echo ""
-          echo "=== Oluşan dosyalar ==="
-          ls -la *.json *.html 2>/dev/null || echo "Dosya oluşmadı!"
+          ls -la *.json *.html 2>/dev/null || echo "Dosya yok"
 
-      - name: Sonuçları göster
+      - name: Sonuclari goster
         if: always()
         run: |
           echo "========== cookies.json =========="
           cat cookies.json 2>/dev/null || echo "YOK"
-          
+
           echo ""
           echo "========== ilanlar.json =========="
           cat ilanlar.json 2>/dev/null || echo "YOK"
@@ -52,4 +64,3 @@ jobs:
             ilanlar.json
             sayfa.html
           retention-days: 7
-          if-no-files-found: warn
