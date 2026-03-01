@@ -1,285 +1,232 @@
 #!/usr/bin/env python3
 """
-Cookie Fabrikası v2 - Stealth Mod
-PerimeterX bypass: stealth + mouse + bekleme
+Sahibinden.com Cookie Fabrikası
+undetected-chromedriver + Xvfb
 """
 
-import os
-import sys
-import json
+import undetected_chromedriver as uc
 import time
+import json
+import sys
 import random
-import requests
-from playwright.sync_api import sync_playwright
-from playwright_stealth import stealth_sync
+from datetime import datetime, timezone
+
+# ── Ayarlar ───────────────────────────────────────────────
+MAIN_URL    = "https://www.sahibinden.com"
+TARGET_URL  = "https://www.sahibinden.com/ekran-karti-masaustu"
+MAX_DENEME  = 3
+
+KRITIK_COOKIELER = ["st", "vid", "_px3", "_pxvid", "_pxhd", "cdid"]
 
 
-def insan_gibi_mouse(page):
-    """Mouse'u rastgele gezdirerek insan gibi davran"""
-    for _ in range(random.randint(3, 6)):
-        x = random.randint(100, 1200)
-        y = random.randint(100, 600)
-        page.mouse.move(x, y)
-        time.sleep(random.uniform(0.3, 0.8))
-
-    # Scroll yap
-    for _ in range(random.randint(2, 4)):
-        page.mouse.wheel(0, random.randint(200, 500))
-        time.sleep(random.uniform(0.5, 1.5))
+def log(msg: str):
+    ts = datetime.now().strftime("%H:%M:%S")
+    print(f"[{ts}] {msg}", flush=True)
 
 
-def insan_gibi_bekle(min_s=3, max_s=7):
-    """Rastgele süre bekle"""
-    sure = random.uniform(min_s, max_s)
-    time.sleep(sure)
+def insan_bekle(az=2.0, cok=5.0):
+    time.sleep(random.uniform(az, cok))
 
 
-def cookie_al():
-    """Stealth mod ile cookie yakala"""
-    print("🍪 Cookie alma başlıyor (STEALTH MOD)...")
-    print(f"⏰ Zaman: {time.strftime('%H:%M:%S')}")
+# ── Tarayıcı oluştur ─────────────────────────────────────
+def tarayici_olustur():
+    opts = uc.ChromeOptions()
 
-    cookies = {}
+    # CI ortamı için zorunlu
+    opts.add_argument("--no-sandbox")
+    opts.add_argument("--disable-dev-shm-usage")
+    opts.add_argument("--disable-gpu")
 
-    with sync_playwright() as p:
-        print("🌐 Stealth Chromium açılıyor...")
+    # Gerçekçi pencere
+    opts.add_argument("--window-size=1920,1080")
 
-        browser = p.chromium.launch(
-            headless=True,
-            args=[
-                "--no-sandbox",
-                "--disable-setuid-sandbox",
-                "--disable-dev-shm-usage",
-                "--disable-blink-features=AutomationControlled",
-                "--disable-features=IsolateOrigins,site-per-process",
-                "--disable-infobars",
-                "--window-size=1920,1080",
-                "--start-maximized",
-            ]
+    # Türkçe
+    opts.add_argument("--lang=tr-TR,tr")
+    opts.add_argument("--accept-lang=tr-TR,tr;q=0.9,en-US;q=0.8,en;q=0.7")
+
+    # Bildirim ve şifre popup kapatma
+    opts.add_experimental_option("prefs", {
+        "intl.accept_languages": "tr-TR,tr,en-US,en",
+        "credentials_enable_service": False,
+        "profile.password_manager_enabled": False,
+        "profile.default_content_setting_values.notifications": 2,
+    })
+
+    driver = uc.Chrome(
+        options=opts,
+        headless=False,       # ZORUNLU — headless tespit edilir
+        use_subprocess=True,  # CI'da daha stabil
+    )
+
+    # Viewport
+    driver.execute_cdp_cmd("Emulation.setDeviceMetricsOverride", {
+        "width": 1920,
+        "height": 1080,
+        "deviceScaleFactor": 1,
+        "mobile": False,
+    })
+
+    # Türkiye timezone
+    driver.execute_cdp_cmd(
+        "Emulation.setTimezoneOverride",
+        {"timezoneId": "Europe/Istanbul"}
+    )
+
+    return driver
+
+
+# ── Cookie topla ──────────────────────────────────────────
+def cookie_topla(driver) -> tuple[dict, bool]:
+
+    # ① Ana sayfa — PX sensörünün yüklenmesini bekle
+    log("① Ana sayfa yükleniyor...")
+    driver.get(MAIN_URL)
+    insan_bekle(6, 10)
+
+    html = driver.page_source
+    log(f"   Ana sayfa HTML: {len(html):,} karakter")
+
+    # Challenge/CAPTCHA varsa bekle
+    if len(html) < 15_000:
+        log("   ⏳ Challenge tespit edildi, 25s bekleniyor...")
+        time.sleep(25)
+        html = driver.page_source
+        log(f"   Challenge sonrası HTML: {len(html):,} karakter")
+
+    # İnsan gibi scroll
+    driver.execute_script("window.scrollTo({top: 400, behavior: 'smooth'})")
+    insan_bekle(2, 4)
+
+    # ② Hedef sayfaya git
+    log("② Hedef sayfa yükleniyor...")
+    driver.get(TARGET_URL)
+    insan_bekle(8, 13)
+
+    # Sayfada gezin
+    for y in [300, 700, 1100]:
+        driver.execute_script(
+            f"window.scrollTo({{top: {y}, behavior: 'smooth'}})"
         )
+        insan_bekle(1, 2.5)
 
-        context = browser.new_context(
-            user_agent=(
-                "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
-                "AppleWebKit/537.36 (KHTML, like Gecko) "
-                "Chrome/131.0.0.0 Safari/537.36"
-            ),
-            viewport={"width": 1920, "height": 1080},
-            locale="tr-TR",
-            timezone_id="Europe/Istanbul",
-            color_scheme="light",
-            java_script_enabled=True,
-            has_touch=False,
-            is_mobile=False,
-        )
+    # ③ Sonuçları topla
+    baslik   = driver.title
+    html     = driver.page_source
+    html_boy = len(html)
+    cookieler = driver.get_cookies()
 
-        page = context.new_page()
+    log(f"\n③ Sonuçlar:")
+    log(f"   Sayfa başlığı : {baslik or '(boş)'}")
+    log(f"   HTML boyutu   : {html_boy:,} karakter")
+    log(f"   Cookie sayısı : {len(cookieler)}")
 
-        # STEALTH MODU AKTİF ET
-        stealth_sync(page)
-        print("🥷 Stealth modu aktif!")
+    # Cookie dict
+    cookie_dict = {}
+    log("\n   ── Cookie Listesi ──")
+    for c in sorted(cookieler, key=lambda x: x["name"]):
+        cookie_dict[c["name"]] = c["value"]
+        yildiz = "★" if c["name"] in KRITIK_COOKIELER else " "
+        deger = c["value"][:60] + "…" if len(c["value"]) > 60 else c["value"]
+        log(f"   {yildiz} {c['name']}: {deger}")
 
-        # Önce Google'a git (doğal görünsün)
-        print("📡 Önce Google'a gidiliyor (doğal görünmek için)...")
-        try:
-            page.goto("https://www.google.com.tr", wait_until="domcontentloaded", timeout=20000)
-            insan_gibi_bekle(2, 4)
-            insan_gibi_mouse(page)
-        except Exception:
-            pass
+    # Kritik cookie kontrolü
+    bulunan = [c for c in KRITIK_COOKIELER if c in cookie_dict]
+    eksik   = [c for c in KRITIK_COOKIELER if c not in cookie_dict]
+    log(f"\n   Kritik: {len(bulunan)}/{len(KRITIK_COOKIELER)}")
+    if bulunan:
+        log(f"   ✅ Bulunan : {bulunan}")
+    if eksik:
+        log(f"   ❌ Eksik   : {eksik}")
 
-        # Ana sayfaya git
-        print("📡 sahibinden.com ana sayfaya gidiliyor...")
-        try:
-            page.goto(
-                "https://www.sahibinden.com",
-                wait_until="domcontentloaded",
-                timeout=45000
-            )
-            print("   Ana sayfa yüklendi, bekleniyor...")
-            insan_gibi_bekle(5, 8)
-            insan_gibi_mouse(page)
-        except Exception as e:
-            print(f"   ⚠️ Ana sayfa hatası: {e}")
+    # İlan kontrolü
+    ilan_sayisi = html.count("searchResultsItem")
+    log(f"   İlan sayısı: ~{ilan_sayisi}")
 
-        # Ekran kartı sayfasına git
-        print("📡 Ekran kartı sayfasına gidiliyor...")
-        try:
-            page.goto(
-                "https://www.sahibinden.com/ekran-karti-masaustu",
-                wait_until="domcontentloaded",
-                timeout=45000
-            )
-            insan_gibi_bekle(4, 7)
-            insan_gibi_mouse(page)
-        except Exception as e:
-            print(f"   ⚠️ Kategori hatası: {e}")
-
-        # Sayfa yüklenmesini bekle (daha uzun)
-        print("⏳ Sayfa yüklenmesi bekleniyor...")
-        ilan_bulundu = False
-
-        for i in range(12):
-            content = page.content()
-
-            if "searchResultsItem" in content:
-                print(f"   ✅ İlanlar yüklendi! (deneme {i+1})")
-                ilan_bulundu = True
-                break
-            elif "px-captcha" in content.lower():
-                print(f"   🛡️ PerimeterX challenge... ({i+1}/12)")
-                # Challenge sayfasında bekle ve mouse gezdirerek çözülmesini bekle
-                insan_gibi_mouse(page)
-                insan_gibi_bekle(5, 10)
-            elif "cf-challenge" in content.lower():
-                print(f"   🛡️ Cloudflare challenge... ({i+1}/12)")
-                insan_gibi_bekle(5, 8)
-            else:
-                print(f"   ⏳ Bekleniyor... ({i+1}/12)")
-                insan_gibi_mouse(page)
-                insan_gibi_bekle(3, 5)
-
-        # İlanlar bulunduysa sayfada biraz gez
-        if ilan_bulundu:
-            print("🖱️ Sayfada geziniliyor (doğal davranış)...")
-            insan_gibi_mouse(page)
-            insan_gibi_bekle(3, 5)
-
-            # Scroll yap
-            for _ in range(3):
-                page.mouse.wheel(0, random.randint(300, 700))
-                insan_gibi_bekle(1, 3)
-
-        # 2. sayfaya geç
-        print("📄 2. sayfaya geçiliyor...")
-        try:
-            page.goto(
-                "https://www.sahibinden.com/ekran-karti-masaustu?pagingOffset=20",
-                wait_until="domcontentloaded",
-                timeout=30000
-            )
-            insan_gibi_bekle(4, 7)
-            insan_gibi_mouse(page)
-        except Exception as e:
-            print(f"   ⚠️ 2. sayfa hatası: {e}")
-
-        # Cookie'leri topla
-        browser_cookies = context.cookies()
-
-        for cookie in browser_cookies:
-            domain = cookie.get("domain", "")
-            if "sahibinden" in domain:
-                cookies[cookie["name"]] = cookie["value"]
-
-        print(f"\n🍪 {len(cookies)} cookie yakalandı!")
-
-        # Önemli cookie kontrol
-        onemli = ["st", "vid", "_px3", "_pxvid", "MS1"]
-        bulunan_onemli = 0
-        for key in onemli:
-            if key in cookies:
-                print(f"   ✅ {key}: mevcut")
-                bulunan_onemli += 1
-            else:
-                print(f"   ❌ {key}: YOK")
-
-        # Sayfa kontrolü
-        content = page.content()
-        if "searchResultsItem" in content:
-            print("✅ Sayfada ilanlar görünüyor!")
-        else:
-            print("⚠️ Sayfada ilan görünmüyor")
-
-            # Debug: Sayfanın başlığını göster
-            title = page.title()
-            print(f"   Sayfa başlığı: {title}")
-            print(f"   HTML boyutu: {len(content)} karakter")
-
-        browser.close()
-        print("🔒 Chromium kapatıldı")
-
-    return cookies
+    # Başarı kriteri
+    basarili = html_boy > 50_000 and len(cookieler) >= 5
+    return cookie_dict, basarili
 
 
-def oracle_gonder(cookies):
-    """Cookie'leri Oracle'a gönder"""
-    oracle_ip = os.environ.get("ORACLE_IP", "")
-    oracle_port = os.environ.get("ORACLE_PORT", "5000")
-    api_key = os.environ.get("ORACLE_API_KEY", "")
-
-    if not oracle_ip:
-        print("⏭️ ORACLE_IP yok, gönderme atlanıyor (henüz kurulmamış)")
-        return True  # Hata değil, sadece henüz kurulmamış
-
-    url = f"http://{oracle_ip}:{oracle_port}/api/cookie-guncelle"
-    print(f"📤 Oracle'a gönderiliyor: {oracle_ip}")
-
+# ── HTML'i de kaydet (debug için) ────────────────────────
+def html_kaydet(driver):
     try:
-        resp = requests.post(url, json={
-            "api_key": api_key,
-            "cookies": cookies,
-            "zaman": time.strftime("%Y-%m-%d %H:%M:%S"),
-            "kaynak": "github-actions-stealth"
-        }, timeout=15)
-
-        if resp.status_code == 200:
-            print(f"✅ Oracle'a gönderildi!")
-            return True
-        else:
-            print(f"❌ Oracle hatası: {resp.status_code}")
-            return False
-    except Exception as e:
-        print(f"❌ Oracle bağlantı hatası: {e}")
-        return False
-
-
-def telegram_bildir(mesaj):
-    """Telegram'dan bildir"""
-    token = os.environ.get("TELEGRAM_BOT_TOKEN", "")
-    chat_id = os.environ.get("TELEGRAM_CHAT_ID", "")
-
-    if not token or not chat_id:
-        print("⏭️ Telegram bilgileri yok, bildirim atlanıyor")
-        return
-
-    try:
-        url = f"https://api.telegram.org/bot{token}/sendMessage"
-        requests.post(url, json={
-            "chat_id": chat_id,
-            "text": f"🏭 Cookie Fabrikası\n{mesaj}"
-        }, timeout=10)
-        print("📱 Telegram bildirimi gönderildi")
+        html = driver.page_source
+        with open("sayfa.html", "w", encoding="utf-8") as f:
+            f.write(html)
+        log(f"sayfa.html kaydedildi ({len(html):,} karakter)")
     except Exception:
         pass
 
 
+# ── Ana akış ──────────────────────────────────────────────
 def main():
-    print("=" * 50)
-    print("🏭 GPU HUNTER - COOKİE FABRİKASI v2")
-    print("🥷 STEALTH MOD AKTİF")
-    print("=" * 50)
+    son_cookieler = {}
+    basarili = False
 
-    # Cookie al
-    cookies = cookie_al()
+    for deneme in range(1, MAX_DENEME + 1):
+        log(f"\n{'━' * 55}")
+        log(f"  DENEME {deneme}/{MAX_DENEME}")
+        log(f"{'━' * 55}")
 
-    if not cookies or len(cookies) < 3:
-        print(f"\n❌ Yetersiz cookie ({len(cookies) if cookies else 0} adet)")
-        telegram_bildir(f"❌ Cookie alınamadı! Sadece {len(cookies) if cookies else 0} cookie.")
+        driver = None
+        try:
+            driver = tarayici_olustur()
+            son_cookieler, basarili = cookie_topla(driver)
+            html_kaydet(driver)
+
+            if basarili:
+                log("\n🎉 Cookie toplama BAŞARILI!")
+                break
+
+            log("⚠️  Yetersiz sonuç, tekrar denenecek...")
+
+        except Exception as e:
+            log(f"💥 Hata: {type(e).__name__}: {e}")
+            import traceback
+            traceback.print_exc()
+
+        finally:
+            if driver:
+                try:
+                    driver.quit()
+                except Exception:
+                    pass
+
+        if deneme < MAX_DENEME:
+            bekleme = deneme * 15
+            log(f"⏳ {bekleme}s bekleniyor...")
+            time.sleep(bekleme)
+
+    # ── Her durumda dosyaya kaydet ────────────────────────
+    sonuc = {
+        "cookies":    son_cookieler,
+        "toplam":     len(son_cookieler),
+        "basarili":   basarili,
+        "tarih":      datetime.now(timezone.utc).isoformat(),
+        "kritik_bulunan": [
+            c for c in KRITIK_COOKIELER if c in son_cookieler
+        ],
+        "kritik_eksik": [
+            c for c in KRITIK_COOKIELER if c not in son_cookieler
+        ],
+    }
+
+    with open("cookies.json", "w", encoding="utf-8") as f:
+        json.dump(sonuc, f, indent=2, ensure_ascii=False)
+
+    log(f"\ncookies.json kaydedildi ({len(son_cookieler)} cookie)")
+
+    # ── Özet ──────────────────────────────────────────────
+    log(f"\n{'═' * 55}")
+    log(f"  ÖZET")
+    log(f"{'═' * 55}")
+    log(f"  Durum     : {'✅ BAŞARILI' if basarili else '❌ BAŞARISIZ'}")
+    log(f"  Cookie    : {len(son_cookieler)}")
+    log(f"  Kritik    : {len(sonuc['kritik_bulunan'])}/{len(KRITIK_COOKIELER)}")
+    log(f"{'═' * 55}")
+
+    if not basarili:
         sys.exit(1)
-
-    # Önemli cookie var mı kontrol
-    onemli_var = any(k in cookies for k in ["st", "vid", "_px3"])
-    if not onemli_var:
-        print("\n⚠️ Önemli cookie'ler eksik!")
-        telegram_bildir("⚠️ Cookie alındı ama önemli olanlar eksik.")
-
-    # Oracle'a gönder
-    oracle_gonder(cookies)
-
-    # Telegram bildir
-    telegram_bildir(f"✅ {len(cookies)} cookie alındı!")
-
-    print("\n🎉 İşlem tamamlandı!")
 
 
 if __name__ == "__main__":
