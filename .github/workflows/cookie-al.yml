@@ -1,35 +1,55 @@
 name: Cookie Al
 
 on:
+  schedule:
+    - cron: "0 */6 * * *"
   workflow_dispatch:
 
 jobs:
   cookie-topla:
     runs-on: ubuntu-latest
+    timeout-minutes: 10
 
     steps:
-      - uses: actions/checkout@v4
+      - name: Repo indir
+        uses: actions/checkout@v4
 
-      - uses: actions/setup-python@v5
+      - name: Python kur
+        uses: actions/setup-python@v5
         with:
           python-version: "3.11"
 
       - name: Paketleri kur
         run: |
           pip install -r requirements-actions.txt
-          pip install curl_cffi
+          echo "--- Kurulu paketler ---"
+          pip list | grep -iE "curl|beautiful|requests"
 
       - name: Scripti çalıştır
         run: |
           python cookie_fabrikasi.py || true
-          ls -la
+          echo ""
+          echo "=== Oluşan dosyalar ==="
+          ls -la *.json *.html 2>/dev/null || echo "Dosya oluşmadı!"
+
+      - name: Sonuçları göster
+        if: always()
+        run: |
+          echo "========== cookies.json =========="
+          cat cookies.json 2>/dev/null || echo "YOK"
+          
+          echo ""
+          echo "========== ilanlar.json =========="
+          cat ilanlar.json 2>/dev/null || echo "YOK"
 
       - name: Artifact kaydet
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: sonuclar
+          name: sonuclar-${{ github.run_number }}
           path: |
             cookies.json
             ilanlar.json
             sayfa.html
+          retention-days: 7
+          if-no-files-found: warn
