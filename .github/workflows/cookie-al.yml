@@ -1,102 +1,35 @@
 name: Cookie Al
 
 on:
-  schedule:
-    - cron: "0 */6 * * *"
   workflow_dispatch:
 
 jobs:
   cookie-topla:
     runs-on: ubuntu-latest
-    timeout-minutes: 10
 
     steps:
-      - name: Repo indir
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v4
 
-      - name: Python kur
-        uses: actions/setup-python@v5
+      - uses: actions/setup-python@v5
         with:
           python-version: "3.11"
 
-      - name: curl-impersonate kur
+      - name: Paketleri kur
         run: |
-          echo "=== curl-impersonate indiriliyor ==="
+          pip install -r requirements-actions.txt
+          pip install curl_cffi
 
-          # curl-impersonate binary indir
-          CURL_IMP_VER="0.8.0"
-          wget -qO /tmp/curl-imp.tar.gz \
-            "https://github.com/lwthiker/curl-impersonate/releases/download/v${CURL_IMP_VER}/curl-impersonate-v${CURL_IMP_VER}.x86_64-linux-gnu.tar.gz"
-
-          sudo mkdir -p /opt/curl-impersonate
-          sudo tar -xzf /tmp/curl-imp.tar.gz -C /opt/curl-impersonate
-
-          # PATH'e ekle
-          echo "/opt/curl-impersonate" >> $GITHUB_PATH
-
-          # Kontrol
-          ls -la /opt/curl-impersonate/
-          echo ""
-
-          # Symlink oluştur
-          if [ -f /opt/curl-impersonate/curl_chrome131 ]; then
-            sudo ln -sf /opt/curl-impersonate/curl_chrome131 /usr/local/bin/curl-impersonate-chrome
-          elif [ -f /opt/curl-impersonate/curl-impersonate-chrome ]; then
-            sudo ln -sf /opt/curl-impersonate/curl-impersonate-chrome /usr/local/bin/curl-impersonate-chrome
-          fi
-
-          echo "curl-impersonate kuruldu"
-
-      - name: Python paketleri kur
-        run: |
-          pip install -q -r requirements-actions.txt
-
-          # curl_cffi — en önemli paket (Python TLS impersonation)
-          pip install -q curl_cffi
-
-          echo "=== Kurulu paketler ==="
-          pip list | grep -iE "curl|beautiful|requests"
-
-      - name: Cookie fabrikasını çalıştır
+      - name: Scripti çalıştır
         run: |
           python cookie_fabrikasi.py || true
-
-          echo ""
-          echo "=== Dosyalar ==="
-          ls -la *.json *.html *.txt 2>/dev/null || echo "Dosya yok"
-
-      - name: Sonuçları göster
-        if: always()
-        run: |
-          echo "========== durum.json =========="
-          cat durum.json 2>/dev/null || echo "YOK"
-
-          echo ""
-          echo "========== cookies.json =========="
-          cat cookies.json 2>/dev/null || echo "YOK"
-
-          echo ""
-          echo "========== ilanlar.json (ilk 500 karakter) =========="
-          head -c 500 ilanlar.json 2>/dev/null || echo "YOK"
-
-          echo ""
-          echo "========== sayfa.html (ilk 1000 karakter) =========="
-          head -c 1000 sayfa.html 2>/dev/null || echo "YOK"
-
-          echo ""
-          echo "========== hata.txt =========="
-          cat hata.txt 2>/dev/null || echo "YOK"
+          ls -la
 
       - name: Artifact kaydet
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: sonuclar-${{ github.run_number }}
+          name: sonuclar
           path: |
             cookies.json
-            durum.json
             ilanlar.json
-            hata.txt
             sayfa.html
-          retention-days: 7
-          if-no-files-found: warn
