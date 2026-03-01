@@ -2,8 +2,8 @@ name: Cookie Al
 
 on:
   schedule:
-    - cron: "0 */6 * * *"        # Her 6 saatte bir
-  workflow_dispatch:               # Manuel tetikleme butonu
+    - cron: "0 */6 * * *"
+  workflow_dispatch:
 
 jobs:
   cookie-topla:
@@ -11,48 +11,75 @@ jobs:
     timeout-minutes: 15
 
     steps:
-      # ── Repo ──
       - name: Repo indir
         uses: actions/checkout@v4
 
-      # ── Python ──
       - name: Python kur
         uses: actions/setup-python@v5
         with:
           python-version: "3.11"
 
-      # ── Chrome + Xvfb ──
       - name: Chrome ve Xvfb kur
         run: |
           sudo apt-get update -qq
-          sudo apt-get install -y -qq xvfb
+          sudo apt-get install -y -qq xvfb xdg-utils
 
           wget -qO /tmp/chrome.deb \
             https://dl.google.com/linux/direct/google-chrome-stable_current_amd64.deb
           sudo dpkg -i /tmp/chrome.deb || sudo apt-get -f install -y -qq
 
-          echo "Chrome versiyonu:"
+          echo "--- Chrome ---"
           google-chrome --version
+          which google-chrome
 
-      # ── Pip paketleri ──
+          echo "--- Xvfb ---"
+          which Xvfb
+
       - name: Python paketleri kur
-        run: pip install -q -r requirements-actions.txt
+        run: |
+          pip install -q -r requirements-actions.txt
+          echo "--- Kurulu paketler ---"
+          pip list | grep -iE "undetected|selenium|requests"
 
-      # ── Çalıştır ──
       - name: Cookie fabrikasını çalıştır
         run: |
+          echo "Çalışma dizini: $(pwd)"
+          echo "Dosyalar: $(ls -la)"
+
           xvfb-run \
             --auto-servernum \
             --server-args="-screen 0 1920x1080x24 -ac" \
-            python cookie_fabrikasi.py
+            python cookie_fabrikasi.py || true
 
-      # ── Sonuçları sakla ──
-      - name: Artifact olarak kaydet
+          echo ""
+          echo "=== Çalışma sonrası dosyalar ==="
+          ls -la *.json *.html *.png *.txt 2>/dev/null || echo "Hiç dosya oluşmamış!"
+
+      - name: Sonuçları göster
+        if: always()
+        run: |
+          echo "=== durum.json ==="
+          cat durum.json 2>/dev/null || echo "durum.json yok"
+
+          echo ""
+          echo "=== cookies.json ==="
+          cat cookies.json 2>/dev/null || echo "cookies.json yok"
+
+          echo ""
+          echo "=== hata.txt ==="
+          cat hata.txt 2>/dev/null || echo "hata.txt yok"
+
+      - name: Artifact kaydet
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: cookies-${{ github.run_number }}
+          name: sonuclar-${{ github.run_number }}
           path: |
             cookies.json
+            durum.json
+            hata.txt
             sayfa.html
+            ana_sayfa.html
+            screenshot_*.png
           retention-days: 7
+          if-no-files-found: warn
