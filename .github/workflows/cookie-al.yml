@@ -8,7 +8,7 @@ on:
 jobs:
   cookie-topla:
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 10
 
     steps:
       - name: Repo indir
@@ -19,55 +19,73 @@ jobs:
         with:
           python-version: "3.11"
 
-      - name: Chrome ve Xvfb kur
+      - name: curl-impersonate kur
         run: |
-          sudo apt-get update -qq
-          sudo apt-get install -y -qq xvfb xdg-utils
+          echo "=== curl-impersonate indiriliyor ==="
 
-          wget -qO /tmp/chrome.deb \
-            https://dl.google.com/linux/direct/google-chrome-stable_current_amd64.deb
-          sudo dpkg -i /tmp/chrome.deb || sudo apt-get -f install -y -qq
+          # curl-impersonate binary indir
+          CURL_IMP_VER="0.8.0"
+          wget -qO /tmp/curl-imp.tar.gz \
+            "https://github.com/lwthiker/curl-impersonate/releases/download/v${CURL_IMP_VER}/curl-impersonate-v${CURL_IMP_VER}.x86_64-linux-gnu.tar.gz"
 
-          echo "--- Chrome ---"
-          google-chrome --version
-          which google-chrome
+          sudo mkdir -p /opt/curl-impersonate
+          sudo tar -xzf /tmp/curl-imp.tar.gz -C /opt/curl-impersonate
 
-          echo "--- Xvfb ---"
-          which Xvfb
+          # PATH'e ekle
+          echo "/opt/curl-impersonate" >> $GITHUB_PATH
+
+          # Kontrol
+          ls -la /opt/curl-impersonate/
+          echo ""
+
+          # Symlink oluştur
+          if [ -f /opt/curl-impersonate/curl_chrome131 ]; then
+            sudo ln -sf /opt/curl-impersonate/curl_chrome131 /usr/local/bin/curl-impersonate-chrome
+          elif [ -f /opt/curl-impersonate/curl-impersonate-chrome ]; then
+            sudo ln -sf /opt/curl-impersonate/curl-impersonate-chrome /usr/local/bin/curl-impersonate-chrome
+          fi
+
+          echo "curl-impersonate kuruldu"
 
       - name: Python paketleri kur
         run: |
           pip install -q -r requirements-actions.txt
-          echo "--- Kurulu paketler ---"
-          pip list | grep -iE "undetected|selenium|requests"
+
+          # curl_cffi — en önemli paket (Python TLS impersonation)
+          pip install -q curl_cffi
+
+          echo "=== Kurulu paketler ==="
+          pip list | grep -iE "curl|beautiful|requests"
 
       - name: Cookie fabrikasını çalıştır
         run: |
-          echo "Çalışma dizini: $(pwd)"
-          echo "Dosyalar: $(ls -la)"
-
-          xvfb-run \
-            --auto-servernum \
-            --server-args="-screen 0 1920x1080x24 -ac" \
-            python cookie_fabrikasi.py || true
+          python cookie_fabrikasi.py || true
 
           echo ""
-          echo "=== Çalışma sonrası dosyalar ==="
-          ls -la *.json *.html *.png *.txt 2>/dev/null || echo "Hiç dosya oluşmamış!"
+          echo "=== Dosyalar ==="
+          ls -la *.json *.html *.txt 2>/dev/null || echo "Dosya yok"
 
       - name: Sonuçları göster
         if: always()
         run: |
-          echo "=== durum.json ==="
-          cat durum.json 2>/dev/null || echo "durum.json yok"
+          echo "========== durum.json =========="
+          cat durum.json 2>/dev/null || echo "YOK"
 
           echo ""
-          echo "=== cookies.json ==="
-          cat cookies.json 2>/dev/null || echo "cookies.json yok"
+          echo "========== cookies.json =========="
+          cat cookies.json 2>/dev/null || echo "YOK"
 
           echo ""
-          echo "=== hata.txt ==="
-          cat hata.txt 2>/dev/null || echo "hata.txt yok"
+          echo "========== ilanlar.json (ilk 500 karakter) =========="
+          head -c 500 ilanlar.json 2>/dev/null || echo "YOK"
+
+          echo ""
+          echo "========== sayfa.html (ilk 1000 karakter) =========="
+          head -c 1000 sayfa.html 2>/dev/null || echo "YOK"
+
+          echo ""
+          echo "========== hata.txt =========="
+          cat hata.txt 2>/dev/null || echo "YOK"
 
       - name: Artifact kaydet
         if: always()
@@ -77,9 +95,8 @@ jobs:
           path: |
             cookies.json
             durum.json
+            ilanlar.json
             hata.txt
             sayfa.html
-            ana_sayfa.html
-            screenshot_*.png
           retention-days: 7
           if-no-files-found: warn
