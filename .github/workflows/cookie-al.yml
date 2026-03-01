@@ -1,49 +1,58 @@
-name: Cookie Fabrikası
+name: Cookie Al
 
-# Her 2 saatte bir çalış
 on:
   schedule:
-    # Her 2 saatte bir (UTC saati)
-    - cron: '0 */2 * * *'
-  
-  # Manuel çalıştırma butonu (test için)
-  workflow_dispatch:
+    - cron: "0 */6 * * *"        # Her 6 saatte bir
+  workflow_dispatch:               # Manuel tetikleme butonu
 
 jobs:
-  cookie-al:
+  cookie-topla:
     runs-on: ubuntu-latest
-    
+    timeout-minutes: 15
+
     steps:
-      # 1. Kodu indir
-      - name: Kodu indir
+      # ── Repo ──
+      - name: Repo indir
         uses: actions/checkout@v4
-      
-      # 2. Python kur
+
+      # ── Python ──
       - name: Python kur
         uses: actions/setup-python@v5
         with:
-          python-version: '3.11'
-      
-      # 3. Playwright cache (hızlandırma)
-      - name: Playwright cache
-        uses: actions/cache@v4
-        with:
-          path: ~/.cache/ms-playwright
-          key: playwright-${{ runner.os }}-v1
-      
-      # 4. Gereksinimleri kur
-      - name: Gereksinimleri kur
+          python-version: "3.11"
+
+      # ── Chrome + Xvfb ──
+      - name: Chrome ve Xvfb kur
         run: |
-          pip install -r requirements-actions.txt
-          playwright install chromium
-          playwright install-deps chromium
-      
-      # 5. Cookie al ve Oracle'a gönder
-      - name: Cookie al ve gönder
-        env:
-          ORACLE_IP: ${{ secrets.ORACLE_IP }}
-          ORACLE_PORT: ${{ secrets.ORACLE_PORT }}
-          ORACLE_API_KEY: ${{ secrets.ORACLE_API_KEY }}
-          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
-          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
-        run: python cookie_fabrikasi.py
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq xvfb
+
+          wget -qO /tmp/chrome.deb \
+            https://dl.google.com/linux/direct/google-chrome-stable_current_amd64.deb
+          sudo dpkg -i /tmp/chrome.deb || sudo apt-get -f install -y -qq
+
+          echo "Chrome versiyonu:"
+          google-chrome --version
+
+      # ── Pip paketleri ──
+      - name: Python paketleri kur
+        run: pip install -q -r requirements-actions.txt
+
+      # ── Çalıştır ──
+      - name: Cookie fabrikasını çalıştır
+        run: |
+          xvfb-run \
+            --auto-servernum \
+            --server-args="-screen 0 1920x1080x24 -ac" \
+            python cookie_fabrikasi.py
+
+      # ── Sonuçları sakla ──
+      - name: Artifact olarak kaydet
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: cookies-${{ github.run_number }}
+          path: |
+            cookies.json
+            sayfa.html
+          retention-days: 7
