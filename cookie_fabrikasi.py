@@ -1,27 +1,30 @@
 #!/usr/bin/env python3
 """
-Sahibinden.com Cookie Fabrikası
-Her adımda dosya yazarak artifact'ın boş kalmasını önler
+Sahibinden.com İlan Çekici
+curl_cffi ile Chrome TLS parmak izi taklidi
+Tarayıcı açmaya gerek yok!
 """
 
-import time
+import subprocess
 import json
 import sys
 import os
+import re
+import time
 import random
-import subprocess
 from datetime import datetime, timezone
+from bs4 import BeautifulSoup
 
-# ── Durum dosyası — her adımda güncellenir ────────────────
-DURUM_DOSYASI = "durum.json"
+# ── Ayarlar ───────────────────────────────────────────────
+DURUM_DOSYASI  = "durum.json"
 COOKIE_DOSYASI = "cookies.json"
-HTML_DOSYASI = "sayfa.html"
-HATA_DOSYASI = "hata.txt"
+ILAN_DOSYASI   = "ilanlar.json"
+HTML_DOSYASI   = "sayfa.html"
+HATA_DOSYASI   = "hata.txt"
+MAX_DENEME     = 3
 
-MAIN_URL = "https://www.sahibinden.com"
-TARGET_URL = "https://www.sahibinden.com/ekran-karti-masaustu"
-MAX_DENEME = 3
-KRITIK_COOKIELER = ["st", "vid", "_px3", "_pxvid", "_pxhd", "cdid"]
+HEDEF_URL = "https://www.sahibinden.com/ekran-karti-masaustu"
+ANA_URL   = "https://www.sahibinden.com"
 
 
 def log(msg: str):
@@ -30,14 +33,12 @@ def log(msg: str):
 
 
 def durum_kaydet(adim: str, detay: dict = None):
-    """Her adımda durum dosyası yaz — artifact hiç boş kalmaz"""
     veri = {
         "adim": adim,
         "zaman": datetime.now(timezone.utc).isoformat(),
         "detay": detay or {},
     }
     try:
-        # Önceki durumları oku
         durumlar = []
         if os.path.exists(DURUM_DOSYASI):
             with open(DURUM_DOSYASI, "r") as f:
@@ -47,293 +48,399 @@ def durum_kaydet(adim: str, detay: dict = None):
         durumlar.append(veri)
         with open(DURUM_DOSYASI, "w") as f:
             json.dump(durumlar, f, indent=2, ensure_ascii=False)
-    except Exception as e:
-        print(f"Durum kaydetme hatası: {e}", flush=True)
-
+    except Exception:
+        pass
     log(f"📌 {adim}")
 
 
-def hata_kaydet(hata_mesaji: str):
-    """Hata olursa dosyaya yaz"""
+def hata_kaydet(msg: str):
     with open(HATA_DOSYASI, "a", encoding="utf-8") as f:
-        f.write(f"[{datetime.now().isoformat()}]\n{hata_mesaji}\n{'='*60}\n")
+        f.write(f"[{datetime.now().isoformat()}]\n{msg}\n{'='*60}\n")
 
 
-def insan_bekle(az=2.0, cok=5.0):
-    time.sleep(random.uniform(az, cok))
+# ── curl-impersonate ile istek at ─────────────────────────
+def curl_isle(url: str, cookie_str: str = "", referer: str = "") -> dict:
+    """
+    curl-impersonate kullanarak Chrome gibi TLS handshake yapar.
+    Normal curl veya requests ile yapılan istekler TLS parmak izinden
+    yakalanır. curl-impersonate bunu çözer.
+    """
 
+    cmd = [
+        "curl-impersonate-chrome",
+        "--max-time", "30",
+        "--location",              # Redirect takip et
+        "--compressed",            # gzip/br kabul et
+        "-s",                      # Sessiz mod
+        "-D", "/dev/stderr",       # Header'ları stderr'e yaz
+        "-H", "accept: text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8",
+        "-H", "accept-language: tr-TR,tr;q=0.9,en-US;q=0.8,en;q=0.7",
+        "-H", "cache-control: max-age=0",
+        "-H", "sec-ch-ua: \"Google Chrome\";v=\"131\", \"Chromium\";v=\"131\", \"Not_A Brand\";v=\"24\"",
+        "-H", "sec-ch-ua-mobile: ?0",
+        "-H", 'sec-ch-ua-platform: "Windows"',
+        "-H", "sec-fetch-dest: document",
+        "-H", "sec-fetch-mode: navigate",
+        "-H", "sec-fetch-site: same-origin",
+        "-H", "sec-fetch-user: ?1",
+        "-H", "upgrade-insecure-requests: 1",
+        "-H", "user-agent: Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
+    ]
 
-# ── Ortam kontrolleri ─────────────────────────────────────
-def ortam_kontrol():
-    durum_kaydet("ortam_kontrol_basladi")
+    if referer:
+        cmd += ["-H", f"referer: {referer}"]
+    else:
+        cmd += ["-H", "sec-fetch-site: none"]
 
-    kontroller = {}
+    if cookie_str:
+        cmd += ["-H", f"cookie: {cookie_str}"]
 
-    # Chrome var mı?
-    try:
-        sonuc = subprocess.run(
-            ["google-chrome", "--version"],
-            capture_output=True, text=True, timeout=10
-        )
-        kontroller["chrome_versiyon"] = sonuc.stdout.strip()
-        log(f"   Chrome: {sonuc.stdout.strip()}")
-    except Exception as e:
-        kontroller["chrome_hata"] = str(e)
-        log(f"   ❌ Chrome bulunamadı: {e}")
+    # Cookie jar — otomatik cookie yönetimi
+    cmd += [
+        "-c", "cookiejar.txt",    # Cookie'leri dosyaya kaydet
+        "-b", "cookiejar.txt",    # Cookie'leri dosyadan oku
+    ]
 
-    # chromedriver var mı kontrol etmeye gerek yok, uc kendisi halleder
+    cmd.append(url)
 
-    # Xvfb kontrolü
-    try:
-        sonuc = subprocess.run(
-            ["xdpyinfo"],
-            capture_output=True, text=True, timeout=5,
-            env={**os.environ, "DISPLAY": os.environ.get("DISPLAY", ":99")}
-        )
-        kontroller["xvfb"] = "çalışıyor" if sonuc.returncode == 0 else "hata"
-        log(f"   Xvfb: {kontroller['xvfb']}")
-    except Exception as e:
-        kontroller["xvfb"] = f"kontrol edilemedi: {e}"
-        log(f"   Xvfb: {kontroller['xvfb']}")
+    log(f"   curl → {url}")
 
-    # DISPLAY
-    kontroller["DISPLAY"] = os.environ.get("DISPLAY", "YOK")
-    log(f"   DISPLAY: {kontroller['DISPLAY']}")
-
-    # Python paketleri
-    try:
-        import undetected_chromedriver as uc_test
-        kontroller["uc_versiyon"] = getattr(uc_test, "__version__", "?")
-        log(f"   undetected-chromedriver: {kontroller['uc_versiyon']}")
-    except ImportError as e:
-        kontroller["uc_hata"] = str(e)
-        log(f"   ❌ undetected-chromedriver import hatası: {e}")
-
-    try:
-        import selenium
-        kontroller["selenium_versiyon"] = selenium.__version__
-        log(f"   selenium: {kontroller['selenium_versiyon']}")
-    except ImportError as e:
-        kontroller["selenium_hata"] = str(e)
-
-    durum_kaydet("ortam_kontrol_bitti", kontroller)
-    return kontroller
-
-
-# ── Tarayıcı oluştur ─────────────────────────────────────
-def tarayici_olustur():
-    durum_kaydet("tarayici_olusturuluyor")
-
-    import undetected_chromedriver as uc
-
-    opts = uc.ChromeOptions()
-
-    # CI zorunlu
-    opts.add_argument("--no-sandbox")
-    opts.add_argument("--disable-dev-shm-usage")
-    opts.add_argument("--disable-gpu")
-    opts.add_argument("--no-first-run")
-    opts.add_argument("--no-default-browser-check")
-    opts.add_argument("--disable-extensions")
-
-    # Gerçekçi pencere
-    opts.add_argument("--window-size=1920,1080")
-
-    # Türkçe
-    opts.add_argument("--lang=tr-TR,tr")
-
-    opts.add_experimental_option("prefs", {
-        "intl.accept_languages": "tr-TR,tr,en-US,en",
-        "credentials_enable_service": False,
-        "profile.password_manager_enabled": False,
-        "profile.default_content_setting_values.notifications": 2,
-    })
-
-    durum_kaydet("chrome_baslatiliyor")
-
-    driver = uc.Chrome(
-        options=opts,
-        headless=False,
-        use_subprocess=True,
-        version_main=None,  # Otomatik algıla
+    sonuc = subprocess.run(
+        cmd,
+        capture_output=True,
+        timeout=45,
     )
 
-    durum_kaydet("chrome_baslatildi")
+    body = sonuc.stdout.decode("utf-8", errors="replace")
+    headers_raw = sonuc.stderr.decode("utf-8", errors="replace")
 
-    # Viewport
-    try:
-        driver.execute_cdp_cmd("Emulation.setDeviceMetricsOverride", {
-            "width": 1920,
-            "height": 1080,
-            "deviceScaleFactor": 1,
-            "mobile": False,
-        })
-    except Exception:
-        pass
+    # Response header'lardan cookie'leri çıkar
+    cookieler = {}
+    for satir in headers_raw.split("\n"):
+        if satir.lower().startswith("set-cookie:"):
+            parcalar = satir.split(":", 1)[1].strip().split(";")[0]
+            if "=" in parcalar:
+                isim, deger = parcalar.split("=", 1)
+                cookieler[isim.strip()] = deger.strip()
 
-    # Timezone
-    try:
-        driver.execute_cdp_cmd(
-            "Emulation.setTimezoneOverride",
-            {"timezoneId": "Europe/Istanbul"}
-        )
-    except Exception:
-        pass
+    # HTTP durum kodu
+    status = 0
+    for satir in headers_raw.split("\n"):
+        m = re.match(r"HTTP/\S+\s+(\d+)", satir)
+        if m:
+            status = int(m.group(1))
 
-    durum_kaydet("tarayici_hazir")
-    return driver
+    return {
+        "status": status,
+        "body": body,
+        "headers_raw": headers_raw,
+        "cookies": cookieler,
+        "body_len": len(body),
+    }
 
 
-# ── Cookie topla ──────────────────────────────────────────
-def cookie_topla(driver) -> tuple[dict, bool]:
+# ── Fallback: normal curl (curl-impersonate yoksa) ───────
+def curl_normal(url: str, cookie_str: str = "", referer: str = "") -> dict:
+    """curl-impersonate bulunamazsa normal curl kullan"""
 
-    # ① Ana sayfa
-    durum_kaydet("ana_sayfa_yukleniyor")
-    driver.get(MAIN_URL)
-    insan_bekle(6, 10)
+    cmd = [
+        "curl",
+        "--max-time", "30",
+        "--location",
+        "--compressed",
+        "-s",
+        "-D", "/dev/stderr",
+        "--ciphers", "TLS_AES_128_GCM_SHA256:TLS_AES_256_GCM_SHA384:TLS_CHACHA20_POLY1305_SHA256:ECDHE-ECDSA-AES128-GCM-SHA256:ECDHE-RSA-AES128-GCM-SHA256",
+        "--tls-max", "1.3",
+        "--http2",
+        "-H", "accept: text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8",
+        "-H", "accept-language: tr-TR,tr;q=0.9,en-US;q=0.8,en;q=0.7",
+        "-H", "cache-control: max-age=0",
+        "-H", "sec-ch-ua: \"Google Chrome\";v=\"131\", \"Chromium\";v=\"131\", \"Not_A Brand\";v=\"24\"",
+        "-H", "sec-ch-ua-mobile: ?0",
+        "-H", 'sec-ch-ua-platform: "Windows"',
+        "-H", "sec-fetch-dest: document",
+        "-H", "sec-fetch-mode: navigate",
+        "-H", "sec-fetch-site: none",
+        "-H", "sec-fetch-user: ?1",
+        "-H", "upgrade-insecure-requests: 1",
+        "-H", "user-agent: Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
+    ]
 
-    html = driver.page_source
-    durum_kaydet("ana_sayfa_yuklendi", {
-        "html_boyut": len(html),
-        "baslik": driver.title,
-        "url": driver.current_url,
-    })
+    if referer:
+        cmd += ["-H", f"referer: {referer}"]
 
-    # HTML kaydet (debug)
-    with open("ana_sayfa.html", "w", encoding="utf-8") as f:
-        f.write(html)
+    if cookie_str:
+        cmd += ["-H", f"cookie: {cookie_str}"]
 
-    # Challenge kontrolü
-    if len(html) < 15_000:
-        durum_kaydet("challenge_tespit_edildi", {"html_boyut": len(html)})
-        log("   ⏳ Challenge tespit edildi, 25s bekleniyor...")
-        time.sleep(25)
-        html = driver.page_source
-        durum_kaydet("challenge_sonrasi", {"html_boyut": len(html)})
+    cmd += ["-c", "cookiejar.txt", "-b", "cookiejar.txt"]
+    cmd.append(url)
 
-    # Scroll
-    driver.execute_script("window.scrollTo({top: 400, behavior: 'smooth'})")
-    insan_bekle(2, 4)
+    log(f"   curl (normal) → {url}")
 
-    # ② Hedef sayfa
-    durum_kaydet("hedef_sayfa_yukleniyor")
-    driver.get(TARGET_URL)
-    insan_bekle(8, 13)
+    sonuc = subprocess.run(cmd, capture_output=True, timeout=45)
 
-    # Scroll
-    for y in [300, 700, 1100]:
-        driver.execute_script(
-            f"window.scrollTo({{top: {y}, behavior: 'smooth'}})"
-        )
-        insan_bekle(1, 2.5)
+    body = sonuc.stdout.decode("utf-8", errors="replace")
+    headers_raw = sonuc.stderr.decode("utf-8", errors="replace")
 
-    # ③ Sonuçları topla
-    baslik = driver.title
-    html = driver.page_source
-    html_boy = len(html)
-    cookieler = driver.get_cookies()
+    cookieler = {}
+    for satir in headers_raw.split("\n"):
+        if satir.lower().startswith("set-cookie:"):
+            parcalar = satir.split(":", 1)[1].strip().split(";")[0]
+            if "=" in parcalar:
+                isim, deger = parcalar.split("=", 1)
+                cookieler[isim.strip()] = deger.strip()
 
-    # Hedef sayfa HTML kaydet
-    with open(HTML_DOSYASI, "w", encoding="utf-8") as f:
-        f.write(html)
+    status = 0
+    for satir in headers_raw.split("\n"):
+        m = re.match(r"HTTP/\S+\s+(\d+)", satir)
+        if m:
+            status = int(m.group(1))
 
-    durum_kaydet("hedef_sayfa_yuklendi", {
-        "baslik": baslik,
-        "html_boyut": html_boy,
-        "cookie_sayisi": len(cookieler),
-        "url": driver.current_url,
-    })
+    return {
+        "status": status,
+        "body": body,
+        "headers_raw": headers_raw,
+        "cookies": cookieler,
+        "body_len": len(body),
+    }
 
-    log(f"\n③ Sonuçlar:")
-    log(f"   Başlık    : {baslik or '(boş)'}")
-    log(f"   HTML      : {html_boy:,} karakter")
-    log(f"   Cookie    : {len(cookieler)}")
+
+# ── curl_cffi yöntemi (Python kütüphanesi) ───────────────
+def curl_cffi_isle(url: str, mevcut_cookieler: dict = None,
+                   referer: str = "") -> dict:
+    """
+    curl_cffi — Python'dan Chrome TLS parmak izi taklidi
+    curl-impersonate'ın Python wrapper'ı
+    """
+    from curl_cffi import requests as cffi_requests
+
+    headers = {
+        "accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8",
+        "accept-language": "tr-TR,tr;q=0.9,en-US;q=0.8,en;q=0.7",
+        "cache-control": "max-age=0",
+        "sec-ch-ua": '"Google Chrome";v="131", "Chromium";v="131", "Not_A Brand";v="24"',
+        "sec-ch-ua-mobile": "?0",
+        "sec-ch-ua-platform": '"Windows"',
+        "sec-fetch-dest": "document",
+        "sec-fetch-mode": "navigate",
+        "sec-fetch-site": "none",
+        "sec-fetch-user": "?1",
+        "upgrade-insecure-requests": "1",
+    }
+
+    if referer:
+        headers["referer"] = referer
+        headers["sec-fetch-site"] = "same-origin"
+
+    log(f"   curl_cffi → {url}")
+
+    resp = cffi_requests.get(
+        url,
+        headers=headers,
+        cookies=mevcut_cookieler or {},
+        impersonate="chrome131",   # Chrome 131 TLS parmak izi
+        timeout=30,
+        allow_redirects=True,
+    )
 
     # Cookie dict
-    cookie_dict = {}
-    log("\n   ── Cookie Listesi ──")
-    for c in sorted(cookieler, key=lambda x: x["name"]):
-        cookie_dict[c["name"]] = c["value"]
-        yildiz = "★" if c["name"] in KRITIK_COOKIELER else " "
-        deger = c["value"][:60] + "…" if len(c["value"]) > 60 else c["value"]
-        log(f"   {yildiz} {c['name']}: {deger}")
+    cookieler = dict(resp.cookies)
 
-    # Kritik kontrol
-    bulunan = [c for c in KRITIK_COOKIELER if c in cookie_dict]
-    eksik = [c for c in KRITIK_COOKIELER if c not in cookie_dict]
-    log(f"\n   Kritik: {len(bulunan)}/{len(KRITIK_COOKIELER)}")
-    if bulunan:
-        log(f"   ✅ {bulunan}")
-    if eksik:
-        log(f"   ❌ {eksik}")
-
-    ilan_sayisi = html.count("searchResultsItem")
-    log(f"   İlan: ~{ilan_sayisi}")
-
-    durum_kaydet("cookie_toplandi", {
-        "toplam_cookie": len(cookie_dict),
-        "kritik_bulunan": bulunan,
-        "kritik_eksik": eksik,
-        "ilan_sayisi": ilan_sayisi,
-        "html_boyut": html_boy,
-    })
-
-    basarili = html_boy > 50_000 and len(cookieler) >= 5
-    return cookie_dict, basarili
+    return {
+        "status": resp.status_code,
+        "body": resp.text,
+        "cookies": cookieler,
+        "body_len": len(resp.text),
+        "headers_raw": str(dict(resp.headers)),
+    }
 
 
-# ── Screenshot al ─────────────────────────────────────────
-def ekran_goruntusu(driver, dosya_adi="screenshot.png"):
+# ── Hangi curl yöntemi kullanılacak? ─────────────────────
+def curl_yontemi_sec():
+    """En iyi mevcut yöntemi seç"""
+
+    # Öncelik 1: curl_cffi (Python paketi)
     try:
-        driver.save_screenshot(dosya_adi)
-        log(f"   📸 {dosya_adi} kaydedildi")
-    except Exception as e:
-        log(f"   📸 Screenshot hatası: {e}")
+        from curl_cffi import requests as test_req
+        log("✅ curl_cffi bulundu — Python TLS impersonation")
+        return "curl_cffi"
+    except ImportError:
+        log("   curl_cffi yok")
+
+    # Öncelik 2: curl-impersonate (binary)
+    try:
+        r = subprocess.run(
+            ["curl-impersonate-chrome", "--version"],
+            capture_output=True, timeout=5
+        )
+        if r.returncode == 0:
+            log("✅ curl-impersonate-chrome bulundu")
+            return "curl_impersonate"
+    except (FileNotFoundError, subprocess.TimeoutExpired):
+        log("   curl-impersonate-chrome yok")
+
+    # Öncelik 3: normal curl
+    try:
+        r = subprocess.run(["curl", "--version"], capture_output=True, timeout=5)
+        if r.returncode == 0:
+            log("⚠️  Sadece normal curl var — TLS parmak izi farklı olacak")
+            return "curl_normal"
+    except (FileNotFoundError, subprocess.TimeoutExpired):
+        pass
+
+    log("❌ Hiçbir curl bulunamadı!")
+    return None
+
+
+def istek_at(url: str, cookieler: dict = None, referer: str = "",
+             yontem: str = "curl_cffi") -> dict:
+    """Seçilen yöntemle istek at"""
+
+    if yontem == "curl_cffi":
+        return curl_cffi_isle(url, cookieler, referer)
+    elif yontem == "curl_impersonate":
+        cookie_str = "; ".join(f"{k}={v}" for k, v in (cookieler or {}).items())
+        return curl_isle(url, cookie_str, referer)
+    else:
+        cookie_str = "; ".join(f"{k}={v}" for k, v in (cookieler or {}).items())
+        return curl_normal(url, cookie_str, referer)
+
+
+# ── İlanları parse et ─────────────────────────────────────
+def ilanlari_ayikla(html: str) -> list[dict]:
+    soup = BeautifulSoup(html, "html.parser")
+    ilanlar = []
+
+    for item in soup.select("tr.searchResultsItem"):
+        baslik_el = item.select_one("a.classifiedTitle")
+        fiyat_el  = item.select_one("td.searchResultsPriceValue span")
+        konum_el  = item.select_one("td.searchResultsLocationValue")
+        tarih_el  = item.select_one("td.searchResultsDateValue span")
+
+        if baslik_el:
+            ilan = {
+                "baslik": baslik_el.get_text(strip=True),
+                "url":    "https://www.sahibinden.com" + baslik_el.get("href", ""),
+                "fiyat":  fiyat_el.get_text(strip=True) if fiyat_el else "",
+                "konum":  konum_el.get_text(" ", strip=True) if konum_el else "",
+                "tarih":  tarih_el.get_text(strip=True) if tarih_el else "",
+            }
+            ilanlar.append(ilan)
+
+    return ilanlar
 
 
 # ── Ana akış ──────────────────────────────────────────────
 def main():
-    # İlk iş: boş dosyaları oluştur — artifact asla boş kalmaz
+    # Boş dosyaları oluştur
     for dosya in [COOKIE_DOSYASI, DURUM_DOSYASI, HATA_DOSYASI]:
         if not os.path.exists(dosya):
             with open(dosya, "w") as f:
                 if dosya.endswith(".json"):
                     json.dump({"durum": "baslamadi"}, f)
                 else:
-                    f.write("Henüz hata yok\n")
+                    f.write("")
 
     durum_kaydet("script_basladi", {
         "python": sys.version,
         "cwd": os.getcwd(),
-        "dosyalar": os.listdir("."),
     })
 
-    # Ortam kontrolü
-    try:
-        ortam = ortam_kontrol()
-    except Exception as e:
-        hata_kaydet(f"Ortam kontrol hatası:\n{e}")
-        durum_kaydet("ortam_kontrol_hatasi", {"hata": str(e)})
+    # Yöntem seç
+    yontem = curl_yontemi_sec()
+    if not yontem:
+        hata_kaydet("Hiçbir curl yöntemi bulunamadı")
+        durum_kaydet("curl_bulunamadi")
+        sys.exit(1)
 
-    son_cookieler = {}
+    durum_kaydet("yontem_secildi", {"yontem": yontem})
+
+    tum_cookieler = {}
     basarili = False
+    ilanlar = []
 
     for deneme in range(1, MAX_DENEME + 1):
         log(f"\n{'━' * 55}")
-        log(f"  DENEME {deneme}/{MAX_DENEME}")
+        log(f"  DENEME {deneme}/{MAX_DENEME}  (yöntem: {yontem})")
         log(f"{'━' * 55}")
 
         durum_kaydet(f"deneme_{deneme}_basladi")
-        driver = None
 
         try:
-            driver = tarayici_olustur()
-            son_cookieler, basarili = cookie_topla(driver)
-            ekran_goruntusu(driver, f"screenshot_{deneme}.png")
+            # ① Ana sayfa — cookie toplamak için
+            log("\n① Ana sayfa...")
+            r1 = istek_at(ANA_URL, yontem=yontem)
+            log(f"   HTTP {r1['status']} | {r1['body_len']:,} karakter | {len(r1['cookies'])} cookie")
+
+            tum_cookieler.update(r1["cookies"])
+            durum_kaydet("ana_sayfa_tamam", {
+                "status": r1["status"],
+                "body_len": r1["body_len"],
+                "cookie_sayisi": len(r1["cookies"]),
+                "cookie_isimleri": list(r1["cookies"].keys()),
+            })
+
+            time.sleep(random.uniform(3, 6))
+
+            # ② Hedef sayfa
+            log("\n② Hedef sayfa...")
+            r2 = istek_at(
+                HEDEF_URL,
+                cookieler=tum_cookieler,
+                referer=ANA_URL,
+                yontem=yontem,
+            )
+            log(f"   HTTP {r2['status']} | {r2['body_len']:,} karakter | {len(r2['cookies'])} cookie")
+
+            tum_cookieler.update(r2["cookies"])
+
+            # HTML kaydet
+            with open(HTML_DOSYASI, "w", encoding="utf-8") as f:
+                f.write(r2["body"])
+
+            # Başlık bul
+            baslik = ""
+            m = re.search(r"<title>(.*?)</title>", r2["body"], re.IGNORECASE)
+            if m:
+                baslik = m.group(1).strip()
+
+            log(f"   Başlık: {baslik or '(boş)'}")
+
+            # İlanları parse et
+            ilanlar = ilanlari_ayikla(r2["body"])
+            log(f"   İlan sayısı: {len(ilanlar)}")
+
+            durum_kaydet("hedef_sayfa_tamam", {
+                "status": r2["status"],
+                "body_len": r2["body_len"],
+                "baslik": baslik,
+                "ilan_sayisi": len(ilanlar),
+                "toplam_cookie": len(tum_cookieler),
+                "cookie_isimleri": list(tum_cookieler.keys()),
+            })
+
+            # İlk 3 ilanı göster
+            if ilanlar:
+                log("\n   ── İlk 3 İlan ──")
+                for i, ilan in enumerate(ilanlar[:3], 1):
+                    log(f"   {i}. {ilan['baslik']}")
+                    log(f"      {ilan['fiyat']} | {ilan['konum']}")
+
+            # Başarı kontrolü
+            basarili = r2["body_len"] > 50_000 and len(ilanlar) > 0
 
             if basarili:
-                log("\n🎉 Cookie toplama BAŞARILI!")
-                durum_kaydet(f"deneme_{deneme}_basarili")
+                log("\n🎉 BAŞARILI!")
+                durum_kaydet(f"deneme_{deneme}_basarili", {
+                    "ilan_sayisi": len(ilanlar),
+                })
+                break
+
+            # 50KB üstü ama ilan yoksa da kısmi başarı
+            if r2["body_len"] > 50_000:
+                log("⚠️  Sayfa geldi ama ilan bulunamadı (HTML yapısı farklı olabilir)")
+                basarili = True  # HTML'yi incelemek için başarılı say
                 break
 
             log("⚠️  Yetersiz sonuç")
@@ -342,69 +449,55 @@ def main():
         except Exception as e:
             import traceback
             hata_detay = traceback.format_exc()
-            log(f"💥 Hata: {type(e).__name__}: {e}")
-            log(hata_detay)
+            log(f"💥 {type(e).__name__}: {e}")
             hata_kaydet(f"Deneme {deneme}:\n{hata_detay}")
             durum_kaydet(f"deneme_{deneme}_hata", {
                 "tip": type(e).__name__,
                 "mesaj": str(e),
             })
 
-            # Crash olsa bile screenshot dene
-            if driver:
-                ekran_goruntusu(driver, f"screenshot_hata_{deneme}.png")
-
-        finally:
-            if driver:
-                try:
-                    driver.quit()
-                    log("   Tarayıcı kapatıldı")
-                except Exception:
-                    pass
-
         if deneme < MAX_DENEME:
-            bekleme = deneme * 15
+            bekleme = deneme * 10
             log(f"⏳ {bekleme}s bekleniyor...")
             time.sleep(bekleme)
 
-    # ── Sonuç dosyası ─────────────────────────────────────
-    sonuc = {
-        "cookies": son_cookieler,
-        "toplam": len(son_cookieler),
-        "basarili": basarili,
-        "tarih": datetime.now(timezone.utc).isoformat(),
-        "kritik_bulunan": [
-            c for c in KRITIK_COOKIELER if c in son_cookieler
-        ],
-        "kritik_eksik": [
-            c for c in KRITIK_COOKIELER if c not in son_cookieler
-        ],
-    }
-
+    # ── Sonuçları kaydet ──────────────────────────────────
     with open(COOKIE_DOSYASI, "w", encoding="utf-8") as f:
-        json.dump(sonuc, f, indent=2, ensure_ascii=False)
+        json.dump({
+            "cookies": tum_cookieler,
+            "toplam": len(tum_cookieler),
+            "basarili": basarili,
+            "tarih": datetime.now(timezone.utc).isoformat(),
+            "yontem": yontem,
+            "cookie_isimleri": sorted(tum_cookieler.keys()),
+        }, f, indent=2, ensure_ascii=False)
 
-    log(f"\n{COOKIE_DOSYASI} kaydedildi ({len(son_cookieler)} cookie)")
+    if ilanlar:
+        with open(ILAN_DOSYASI, "w", encoding="utf-8") as f:
+            json.dump({
+                "toplam": len(ilanlar),
+                "tarih": datetime.now(timezone.utc).isoformat(),
+                "ilanlar": ilanlar,
+            }, f, indent=2, ensure_ascii=False)
 
     # ── Özet ──────────────────────────────────────────────
     log(f"\n{'═' * 55}")
     log(f"  ÖZET")
     log(f"{'═' * 55}")
-    log(f"  Durum  : {'✅ BAŞARILI' if basarili else '❌ BAŞARISIZ'}")
-    log(f"  Cookie : {len(son_cookieler)}")
-    log(f"  Kritik : {len(sonuc['kritik_bulunan'])}/{len(KRITIK_COOKIELER)}")
+    log(f"  Durum   : {'✅ BAŞARILI' if basarili else '❌ BAŞARISIZ'}")
+    log(f"  Yöntem  : {yontem}")
+    log(f"  Cookie  : {len(tum_cookieler)}")
+    log(f"  İlan    : {len(ilanlar)}")
+    log(f"  Cookieler: {sorted(tum_cookieler.keys())}")
     log(f"{'═' * 55}")
 
     durum_kaydet("script_bitti", {
         "basarili": basarili,
-        "cookie_sayisi": len(son_cookieler),
+        "cookie_sayisi": len(tum_cookieler),
+        "ilan_sayisi": len(ilanlar),
     })
 
-    # Başarısız olsa bile exit(0) — artifact'lar kaybolmasın
-    # Gerçek başarısızlığı cookies.json içindeki "basarili" alanından anla
     if not basarili:
-        log("\n⚠️  Script başarısız ama dosyalar kaydedildi")
-        log("    Artifact'ları indirip durum.json ve hata.txt'yi kontrol et")
         sys.exit(1)
 
 
